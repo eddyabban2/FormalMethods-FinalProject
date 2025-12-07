@@ -14,6 +14,7 @@
 // ------------------------------------------------------------------
 //       High Part       |            Low Part
 //
+// This is computing the section of a that is within 32 bits, on each iteration we add A left shifted over by a certain amount if the lowerst bit of b is positive
 // 1. for LOW part output:
 //        def imul( a, b ):
 //            result = 0
@@ -37,7 +38,7 @@
 //            return result
 // 3. for negtive high part output, we have to check if the low part of the
 // abs(result) are all zeros. If it is all zero, we have to add 1 to the
-// neg high part, otherwise we onely have to neg the high part
+// neg high part, otherwise we only have to neg the high part
 //  -(4'b10_00) = ~(4'b10 00) + 1 = 4'b01_11 + 1= 4'b10_00
 //  -(4'b10_10) = ~(4'b10_10) + 1 = 4'b01_01 + 1= 4'b01_10
 //
@@ -129,7 +130,8 @@ module bsg_imul_iterative  #( width_p = 32)
   logic [width_p-1:0]  adder_a, adder_b;
   logic [width_p  :0]  adder_result,shifted_adder_result;
 
-  // -opA_r = ~opA_r + 1, reunsing the adder here
+  // -opA_r = ~opA_r + 1, reusing the adder here
+  // used to invert a number based on the current state
   assign adder_a = (curr_state_r == NEG_A) ? ~opA_r  :
                    (curr_state_r == NEG_B) ? ~opB_r  :
                    (curr_state_r == NEG_R) ? ~result_r : result_r;
@@ -138,6 +140,7 @@ module bsg_imul_iterative  #( width_p = 32)
                     || curr_state_r == NEG_B
                     || curr_state_r == NEG_R);
 
+  // assigned 1 with zero preprended or opA_r
   assign adder_b = adder_neg_op  ? { {(width_p-1){1'b0}}, 1'b1}
                                  :  opA_r   ;
 
@@ -235,6 +238,15 @@ module bsg_imul_iterative  #( width_p = 32)
     end
   end
 
+reg first_cycle_done;
+initial begin
+    first_cycle_done = '0;
+end
+
+always_ff @(posedge clk_i) begin
+    first_cycle_done <= '1;
+end
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //   the output logic
@@ -242,4 +254,83 @@ module bsg_imul_iterative  #( width_p = 32)
   assign ready_and_o    =  ( curr_state_r == IDLE );
   assign result_o   =    result_r;
   assign v_o        =  ( curr_state_r == DONE );
+
+`ifdef FORMAL
+
+// verifying state logic 
+initial curr_state_r = IDLE;
+initial shift_counter_r = '0;
+initial signed_opA_r = 1'b0;
+initial signed_opB_r = 1'b0;
+initial reset_i = 1'b1;
+
+// verifying shift counter 
+always_ff @(posedge clk_i) begin
+  if ($past(reset_i))
+    shift_counter_reset: assert(shift_counter_r == 1'b0);
+  else if ($past(curr_state_r) != CALC && $past(next_state) == CALC) 
+    shitft_counter_reset_before_calc: assert(shift_counter_r == 1'b0);
+  else if ($past(curr_state_r) == CALC && curr_state_r == CALC)
+    shitft_counter_reset_counts: assert(shift_counter_r == $past(shift_counter_r) + 1);
+end
+
+always_comb begin
+  if (v_o)
+    v_o_iff_done: assert(curr_state_r == DONE);
+end
+
+always_comb begin
+  if (ready_and_o)
+    ready_and_o_iff_idle: assert(curr_state_r == IDLE);
+end
+
+// Verify all control registers latch on valid input
+always_ff @(posedge clk_i) begin
+  if (!$past(reset_i)) begin
+    if ($past(latch_input) && first_cycle_done) begin
+      gets_high_part_latches: assert(gets_high_part_r == $past(gets_high_part_i));
+      signed_opA_latches: assert(signed_opA_r == $past(signed_opA));
+      signed_opB_latches: assert(signed_opB_r == $past(signed_opB));
+      need_neg_result_latches: assert(need_neg_result_r == $past(signed_opA ^ signed_opB));
+    end
+  else if (first_cycle_done) 
+    begin
+      gets_high_part_latches_reset: assert(gets_high_part_r == 1'b0);
+      signed_opA_latches_reset: assert(signed_opA_r == 1'b0);
+      signed_opB_latches_reset: assert(signed_opB_r == 1'b0);
+      need_neg_result_latches_reset: assert(need_neg_result_r == 1'b0);
+    end
+  end
+end
+
+always_comb begin 
+  unique case(curr_state_r)
+    IDLE: begin
+      if( v_i )  idle_into_NEG_A: assert(next_state == NEG_A);
+      else       idle_stays_idle: assert(next_state == IDLE);
+    end
+    NEG_A: neg_a_to_neg_b: assert(next_state == NEG_B);
+    NEG_B: neg_b_to_calc:  assert(next_state == CALC);
+    NEG_R: neg_r_to_done:  assert(next_state == DONE);
+
+    CALC: begin
+      if( !shift_counter_full ) calc_stays_calc: assert(next_state == CALC);
+      else                      calc_to_neg_r: assert(next_state == NEG_R);
+    end
+    DONE: begin
+      if( yumi_i ) yumi_to_idle_when_yumi: assert(next_state == IDLE);
+      else         done_stays_done: assert(next_state == DONE);
+    end
+    default: default_to_idle: assert(next_state == IDLE);
+  endcase
+end 
+
+`ifdef VERIFIC
+
+
+`endif // VERIFIC
+
+`endif // FORMAL
+
+
 endmodule
