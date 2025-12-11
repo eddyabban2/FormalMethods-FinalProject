@@ -1,0 +1,63 @@
+[options]
+mode prove
+depth 40
+wait on
+
+[engines]
+smtbmc boolector
+
+[script]
+# ==============================================================
+# 1. Read Required LowRISC Primitive Packages
+# ==============================================================
+read -sv prim_pkg.sv
+read -sv prim_util_pkg.sv
+read -sv prim_flop.sv
+
+# ==============================================================
+# 2. Read Ibex Core Packages and Dependencies
+# ==============================================================
+read -sv ibex_pkg.sv
+
+# ==============================================================
+# 3. Read Primitive Dependencies
+# ==============================================================
+read -sv prim_secded_inv_39_32_dec.sv
+read -sv prim_secded_inv_39_32_enc.sv
+read -sv prim_buf.sv
+read -sv prim_assert.sv
+
+# ==============================================================
+# 4. Read DUT
+# ==============================================================
+read -sv -I. ibex_load_store_unit.sv
+
+# ==============================================================
+# 5. Read Harness
+# ==============================================================
+read -sv -I. -DFORMAL ibex_lsu_harness.sv
+
+# ==============================================================
+# 6. Prepare
+# ==============================================================
+prep -top ibex_lsu_harness
+
+
+[files]
+# Harness + DUT
+ibex_lsu_harness.sv
+../../rtl/ibex_pkg.sv
+../../rtl/ibex_load_store_unit.sv
+
+# LowRISC dependencies
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_pkg.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_util_pkg.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_flop.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_flop_macros.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_secded_inv_39_32_dec.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_secded_inv_39_32_enc.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_assert.sv
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_assert_dummy_macros.svh
+../../vendor/lowrisc_ip/ip/prim/rtl/prim_assert_sec_cm.svh
+../../dv/uvm/core_ibex/common/prim/prim_buf.sv
+../../vendor/lowrisc_ip/dv/sv/dv_utils/dv_fcov_macros.svh
