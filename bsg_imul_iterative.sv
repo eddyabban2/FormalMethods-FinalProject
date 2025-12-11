@@ -247,6 +247,22 @@ always_ff @(posedge clk_i) begin
     first_cycle_done <= '1;
 end
 
+logic [4:0] cycles_32;
+
+initial begin
+    cycles_32 = '0;
+end
+
+always_ff @(posedge clk_i) begin
+    if (cycles_32 != 31)
+        cycles_32 <= cycles_32 + 1;
+end
+
+wire cycle_done_32;
+assign cycle_done_32 = (cycles_32 == 31);
+
+
+
 
 ///////////////////////////////////////////////////////////////////////////////
 //   the output logic
@@ -255,22 +271,29 @@ end
   assign result_o   =    result_r;
   assign v_o        =  ( curr_state_r == DONE );
 
+logic [31:0] reset_history;
+    
+always_ff @(posedge clk_i) begin
+    reset_history <= {reset_history[30:0], reset_i};
+end
+
 `ifdef FORMAL
 
 // verifying state logic 
-initial curr_state_r = IDLE;
-initial shift_counter_r = '0;
-initial signed_opA_r = 1'b0;
-initial signed_opB_r = 1'b0;
-initial reset_i = 1'b1;
+// In your formal properties section
+always @(posedge clk) begin
+    if ($initstate) begin
+        assume(reset_i == 1'b1);
+    end
+end
 
 // verifying shift counter 
 always_ff @(posedge clk_i) begin
-  if ($past(reset_i))
+  if ($past(reset_i) && first_cycle_done)
     shift_counter_reset: assert(shift_counter_r == 1'b0);
-  else if ($past(curr_state_r) != CALC && $past(next_state) == CALC) 
+  else if ($past(curr_state_r) != CALC && $past(next_state) == CALC && first_cycle_done) 
     shitft_counter_reset_before_calc: assert(shift_counter_r == 1'b0);
-  else if ($past(curr_state_r) == CALC && curr_state_r == CALC)
+  else if ($past(curr_state_r) == CALC && curr_state_r == CALC && first_cycle_done)
     shitft_counter_reset_counts: assert(shift_counter_r == $past(shift_counter_r) + 1);
 end
 
@@ -293,7 +316,7 @@ always_ff @(posedge clk_i) begin
       signed_opB_latches: assert(signed_opB_r == $past(signed_opB));
       need_neg_result_latches: assert(need_neg_result_r == $past(signed_opA ^ signed_opB));
     end
-  else if (first_cycle_done) 
+  else if (first_cycle_done && $past(reset_i)) 
     begin
       gets_high_part_latches_reset: assert(gets_high_part_r == 1'b0);
       signed_opA_latches_reset: assert(signed_opA_r == 1'b0);
@@ -323,12 +346,57 @@ always_comb begin
     end
     default: default_to_idle: assert(next_state == IDLE);
   endcase
+end
+
+always_comb begin
+  result_o_matches: assert(result_o == result_r);
+end
+
+always_comb begin
+  ready_and_o_v_o_exclusive: assert(!(ready_and_o && v_o));
+end
+
+always_ff @(posedge clk_i) begin
+  if (!$past(reset_i) && $past(v_o) && !$past(yumi_i) && first_cycle_done) begin
+    v_o_stable: assert(v_o);
+    result_stable: assert(result_r == $past(result_r));
+  end
+end
+
+always_comb begin 
+  if(curr_state_r != CALC && first_cycle_done)
+    shift_counter_full_only_calc: assert(!shift_counter_full); 
 end 
 
-`ifdef VERIFIC
+always_comb begin 
+  latch_is_correct: assert(latch_input == (v_i & ready_and_o));
+  if(curr_state_r == IDLE && first_cycle_done && v_i) begin
+    latch_when_idle: assert(latch_input);
+  end 
+end 
 
+// if we recieve a valid input we should respond to it in one clock cycle 
+always_ff @(posedge clk_i) begin
+  if (!$past(reset_i) && $past(v_i) && $past(ready_and_o) && first_cycle_done) begin
+    in_valid_next_cycle: assert(curr_state_r == NEG_A); // NEG_A is first step of computaion
+  end
+end
 
-`endif // VERIFIC
+logic reset_occurred;
+integer i;
+
+always_ff @(posedge clk_i) begin
+  if ($past(v_i,32) && $past(ready_and_o,32) && first_cycle_done && cycle_done_32 && reset_history == 32'b0) begin
+    valid_output_within_32_cycles: assert(
+      (curr_state_r == DONE));
+      correct_result_within_32_cycles: assert(
+        (gets_high_part_r == gets_high_part_i) &&
+        (result_o == (signed_opA_i || signed_opB_i
+                      ? $signed($signed(opA_i) * $signed(opB_i))[gets_high_part_i ? 63:32 : 31:0]
+                      : (opA_i * opB_i))[gets_high_part_i ? 63:32 : 31:0])
+      );
+  end
+end
 
 `endif // FORMAL
 
